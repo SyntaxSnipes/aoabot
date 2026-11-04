@@ -1,3 +1,23 @@
+# AOABot
+
+AOABot is the TeamAOA water rocket project assistant.
+
+## Run locally
+
+```bash
+npm install
+cp .env.example .env.local
+npm run dev
+```
+
+Set `GEMINI_API_KEY` in `.env.local` to enable Gemini responses. The key is read only by the server-side `/api/chat` route and is never exposed to the browser. `GEMINI_MODEL` is optional and defaults to `gemini-3-flash-preview`. The route uses Gemini's Interactions API and falls back across available models when a model is unavailable or overloaded.
+
+The assistant is constrained by a project-grounded system prompt and does not invent missing rocket or telemetry values. The conversation remains available while the page is open and resets to a fresh chat after a browser refresh. The API validates request size, rate-limits clients, applies local safety checks, and uses Gemini safety settings.
+
+Never commit a real API key. If a real key was placed in `.env.example` or committed anywhere, revoke it and create a replacement key.
+
+## Next.js setup
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started
