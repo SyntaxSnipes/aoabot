@@ -1,0 +1,18 @@
+{
+  "flightId": "demo-001",
+  "isDemoData": true,
+  "points": [
+    { "time": 0, "altitude": 0, "pitch": 50 },
+    { "time": 0.4, "altitude": 9, "pitch": 47 },
+    { "time": 0.8, "altitude": 25, "pitch": 39 },
+    { "time": 1.2, "altitude": 47, "pitch": 28 },
+    { "time": 1.6, "altitude": 68, "pitch": 15 },
+    { "time": 2, "altitude": 82, "pitch": 3 },
+    { "time": 2.4, "altitude": 88, "pitch": -8 },
+    { "time": 2.8, "altitude": 84, "pitch": -22 },
+    { "time": 3.2, "altitude": 71, "pitch": -35 },
+    { "time": 3.6, "altitude": 50, "pitch": -48 },
+    { "time": 4, "altitude": 25, "pitch": -57 },
+    { "time": 4.4, "altitude": 4, "pitch": -64 }
+  ]
+}

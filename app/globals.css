@@ -21,3 +21,40 @@ button,input { font:inherit; }
 @media (max-width:900px) { .content-grid { gap:35px; padding:45px 28px 60px; }.sidebar { width:210px; } }
 @keyframes blink { from { opacity:.35; transform:translateY(1px); } to { opacity:1; transform:translateY(-1px); } }
 @media (max-width:700px) { .app-shell { display:block; }.sidebar { display:none; }.topbar { height:60px; padding:0 16px; justify-content:space-between; position:sticky; top:0; z-index:2; }.mobile-brand { display:flex; gap:8px; font-size:15px; }.mobile-brand .brand-mark { width:28px; height:28px; }.topbar-right span:last-child,.topbar-right .divider { display:none; }.content-grid { display:block; padding:28px 14px calc(38px + env(safe-area-inset-bottom)); }.chat-heading { margin-bottom:24px; }.chat-heading h1 { font-size:26px; }.subheading { font-size:12px; }.bot-badge { display:none; }.messages { max-height:none; overflow:visible; padding-right:0; gap:16px; }.message-bubble { max-width:calc(100% - 37px); padding:12px 14px 10px; }.message-bubble p { font-size:12px; }.quick-ask { margin-top:24px; overflow:hidden; }.quick-ask div { flex-wrap:nowrap; overflow-x:auto; padding-bottom:5px; scrollbar-width:none; }.quick-ask div::-webkit-scrollbar { display:none; }.quick-ask button { flex:0 0 auto; }.composer { position:sticky; bottom:10px; z-index:1; margin:18px -2px 0; padding:7px; background:#0E1110eF; backdrop-filter:blur(8px); }.composer input { padding:13px 12px; }.composer button { flex:0 0 44px; width:44px; }.disclaimer { line-height:1.4; padding:0 10px; } }
+
+.brand { padding-bottom:49px; }
+.topbar { justify-content:space-between; }
+.mobile-brand { display:flex; gap:8px; font-size:15px; }
+.chat-heading h1 { max-width:680px; font-size:22px; line-height:1.35; letter-spacing:-.3px; margin:0 0 28px; }
+.demo-tag,.demo-pill { display:inline-block; color:var(--warn); border:1px solid var(--warn); border-radius:4px; font-size:8px; font-weight:700; letter-spacing:.8px; padding:2px 4px; vertical-align:middle; white-space:nowrap; }
+.demo-pill { border-radius:999px; padding:5px 8px; }
+.spec-grid strong { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.flight-panel { background:#1A1F1C; border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:0 3px 12px #00000018; }
+.flight-heading { display:flex; align-items:flex-start; justify-content:space-between; }
+.flight-heading h2 { font-size:17px; margin:7px 0 0; }
+.flight-chart { display:block; width:100%; height:auto; margin:18px 0 8px; background:#1A1F1C; }
+.flight-chart text { fill:var(--muted); font-size:9px; }
+.chart-grid { stroke:var(--line); stroke-width:1; }
+.altitude-line { fill:none; stroke:#6B8F5E; stroke-width:3; stroke-linecap:round; stroke-linejoin:round; }
+.apogee-marker { fill:#D9A441; }
+.playback-marker { fill:var(--ink); stroke:#6B8F5E; stroke-width:3; }
+.scrubber { width:100%; accent-color:#6B8F5E; }
+.flight-controls { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:10px; margin-top:6px; }
+.flight-controls button { border:1px solid var(--line); border-radius:5px; background:var(--soft); color:var(--ink); width:27px; height:25px; cursor:pointer; }
+.flight-readouts { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:17px; }
+.flight-readouts div { border-top:1px solid var(--line); padding-top:9px; }
+.flight-readouts span { display:block; color:var(--muted); font-size:8px; letter-spacing:.8px; }
+.flight-readouts strong { display:block; font-size:14px; margin-top:4px; }
+.computed-tag { display:inline-block; color:var(--warn); background:#2B281E; border-radius:4px; font-size:10px; margin-top:9px; padding:4px 6px; }
+.safety-answer .message-bubble { border-left:3px solid #C4584C; }
+.safety-strip { display:grid; gap:7px; border:1px solid var(--line); border-left:3px solid #C4584C; border-radius:9px; background:#1A1F1C; padding:15px 17px; color:var(--muted); font-size:10px; line-height:1.35; }
+.safety-strip strong { color:var(--ink); font-size:13px; }
+.safety-strip small { color:var(--warn); margin-top:2px; }
+.sidebar-footer { line-height:1.5; }
+
+@media (max-width:700px) {
+  .topbar { justify-content:space-between; }
+  .chat-heading h1 { font-size:20px; margin-bottom:24px; }
+  .flight-panel { margin-top:0; padding:15px; }
+  .flight-readouts strong { font-size:12px; }
+}
