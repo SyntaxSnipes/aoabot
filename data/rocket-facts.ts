@@ -31,26 +31,45 @@ export const rocketFacts: Record<string, RocketFact<string | null>> = {
     value: "Not confirmed",
     status: "demo",
   },
-  waterLoad: {
-    value: "500 mL",
+  dryMass_kg: {
+    value: "0.18 kg",
     status: "demo",
-    note: "About one third of the bottle",
+    note: "Bottle, printed parts, electronics, and battery; excludes water",
   },
-  launchAngle: {
+  waterMass_kg: {
+    value: "0.50 kg",
+    status: "demo",
+    note: "Estimated from the water load",
+  },
+  longAxis: {
+    value: "y",
+    status: "demo",
+    note: "Nose direction is the negative y sensor axis",
+  },
+  axisSign: {
+    value: "-1",
+    status: "demo",
+    note: "Sign that points along the rocket nose",
+  },
+  launchAngle_deg: {
     value: "50°",
     status: "demo",
   },
-  launchPressure: {
+  launchPressure_bar: {
     value: "5 bar",
     status: "demo",
     note: "Gauge pressure",
+  },
+  waterVolume_ml: {
+    value: "500 mL",
+    status: "demo",
   },
   bestMeasuredRange: {
     value: null,
     status: "demo",
   },
   electronics: {
-    value: "ESP32 · barometer · IMU",
+    value: "ESP32 accelerometer",
     status: "confirmed",
   },
   electronicsMass: {
