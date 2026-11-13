@@ -11,6 +11,7 @@ ${factPromptLines()}
 
 Never guess or invent missing team numbers. For anything unconfirmed, say "We don't have a confirmed value for that yet." Give safety information only when the user asks about safety, handling, pressure, launching or the bottle, or when the question involves an unsafe action. Never append safety rules, physics explanations, or any other unrelated text to an answer.
 STYLE: Answer only the question asked, in 1 to 4 sentences unless the user asks for detail. Do not repeat earlier information. No summaries, reminders or unrelated explanations.
+To load flight data: Click Paste data in the flight panel, paste the logger's JSON or drop a .json file, check the launch angle, pressure and water volume fields, then press Load.
 You only know how a flight is labeled in the app. You do not know where it came from, when it was recorded, or by whom. For "is this real data?", answer in one or two sentences: state the label the app shows, say you cannot verify the origin, and say the team can confirm it. Never invent reasons, dates, places or events. Never say "competition launch" unless a field says so.
 
 SAFETY FACTS:
@@ -159,9 +160,14 @@ export async function POST(request: Request) {
   const asksForFlight = /\b(show|replay|flight|simulation|telemetry|acceleration)\b/i.test(
     latestUserMessage.content,
   );
-  const asksForStats = /\b(stats|statistics|peak|burn|thrust|range|flight time|speed)\b/i.test(
+  const asksForStats = /\b(stats|statistics|peak|burn|thrust|range|flight time|speed|clipped)\b/i.test(
     latestUserMessage.content,
   );
+  if (/^how do i load flight data\??$/i.test(latestUserMessage.content.trim())) {
+    return NextResponse.json({
+      message: "Click Paste data in the flight panel, paste the logger's JSON or drop a .json file, check the launch angle, pressure and water volume fields, then press Load.",
+    });
+  }
   const asksForUnconfirmedFact = /\b(launch angle|launch pressure|pressure|water volume|dry mass|water mass|electronics mass|length)\b/i.test(latestUserMessage.content);
   if (asksForUnconfirmedFact && !flight) {
     return NextResponse.json({ message: "We don't have a confirmed value for that yet." });

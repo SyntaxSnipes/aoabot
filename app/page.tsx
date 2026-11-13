@@ -2,8 +2,11 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import Image from "next/image";
-import { rocketFacts, SAFETY_FACTS, type FactStatus, type RocketFact } from "@/data/rocket-facts";
+import dynamic from "next/dynamic";
+import { rocketFacts, type FactStatus, type RocketFact } from "@/data/rocket-facts";
 import { get_flight_stats, type FlightData, type FlightProvenance, type FlightStats } from "@/lib/flightStats";
+
+const RocketModelPanel = dynamic(() => import("./RocketModelPanel"), { ssr: false });
 
 type Message = {
   id: number;
@@ -12,11 +15,20 @@ type Message = {
   stats?: FlightStats;
 };
 
-const quickQuestions = [
-  "Show flight 2",
+const noFlightQuestions = [
+  "How does a water rocket work?",
+  "What are the safety rules?",
+  "How does stability work?",
+  "Why is it called AngleOfAttack?",
+  "What does our rocket measure?",
+  "How do I load flight data?",
+];
+
+const loadedFlightQuestions = [
   "What was our peak acceleration?",
   "How long was the burn?",
   "Estimate our thrust and range",
+  "Was the sensor clipped?",
   "Is this real data?",
   "What are the safety rules?",
 ];
@@ -417,10 +429,12 @@ export default function Home() {
               {isLoading && <div className="typing-indicator"><span /><span /><span /> Thinking…</div>}
               <div ref={messagesEndRef} />
             </div>
-            <div className="quick-ask"><p>TRY ASKING</p><div>{quickQuestions.map((question) => {
-              const needsFlight = question !== "What are the safety rules?";
-              return <button key={question} disabled={needsFlight && !selectedFlight} onClick={() => submit(question)}>{question}</button>;
-            })}</div></div>
+            <div className="quick-ask"><p>TRY ASKING</p><div>{(selectedFlight
+              ? flights.length >= 2
+                ? loadedFlightQuestions.map((question) => question === "Is this real data?" ? "Compare my flights" : question)
+                : loadedFlightQuestions
+              : noFlightQuestions
+            ).map((question) => <button key={question} onClick={() => submit(question)}>{question}</button>)}</div></div>
             <form className="composer" onSubmit={(event: FormEvent<HTMLFormElement>) => { event.preventDefault(); submit(input); }}>
               <input aria-label="Ask about the water rocket" maxLength={2000} value={input} onChange={(event) => setInput(event.target.value)} placeholder="Ask a question about our water rocket..." />
               <button aria-label="Send question" type="submit" disabled={isLoading}><SendIcon /></button>
@@ -430,6 +444,7 @@ export default function Home() {
           </section>
           <aside className="info-column">
             {snapshotFacts.some(([, fact]) => fact.status === "confirmed") && <div className="info-card snapshot"><div className="card-heading"><div><p className="eyebrow">AT A GLANCE</p><h2>Rocket snapshot</h2></div></div><div className="spec-grid">{snapshotFacts.filter(([, fact]) => fact.status === "confirmed").map(([label, fact]) => <div key={label}><span>{label}</span><strong>{fact.value}</strong><small>{fact.note}</small></div>)}</div><div className="not-confirmed"><span className="warning-icon">!</span><span>Unconfirmed design values are hidden</span></div></div>}
+            <RocketModelPanel />
             <div ref={flightPanelRef}>{flights.length > 0 && <div className="flight-list">{flights.map((flight) => <button type="button" className={flight.flight_id === selectedFlight?.flight_id ? "selected" : ""} key={flight.flight_id} onClick={() => selectFlight(flight.flight_id)}>{flight.label ?? `Flight ${flight.flight_id}`} · {provenanceLabel(flight.provenance)}</button>)}</div>}{selectedFlight ? <FlightPanel key={selectedFlight.flight_id} flight={selectedFlight} stats={selectedStats} onPaste={openPaste} /> : <div className="info-card no-flight">No flight loaded. Paste flight data.<button type="button" onClick={openPaste}>Paste data</button></div>}
               {pasteOpen && <div className="paste-panel">
                 <h3>Paste flight data</h3>
@@ -450,7 +465,6 @@ export default function Home() {
               </div>}
               {!pasteOpen && pasteWarnings.map((warning) => <p className="paste-warning" key={warning}>{warning}</p>)}
             </div>
-            <div className="safety-strip" id="safety"><strong>Safety</strong>{SAFETY_FACTS.map((fact) => <span key={fact}>{fact}</span>)}</div>
           </aside>
         </div>
       </section>
