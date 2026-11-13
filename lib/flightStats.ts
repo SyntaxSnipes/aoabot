@@ -110,6 +110,7 @@ export function get_flight_stats(flightId: number, flight?: FlightData, selectio
     };
   }
 
+  const launchType = flight.launchType ?? "other";
   const config = flightConfig();
   const selectedSamples = selection
     ? flight.samples.filter((sample) => sample[0] / 1_000_000 >= selection.startTime && sample[0] / 1_000_000 <= selection.endTime)
@@ -128,6 +129,7 @@ export function get_flight_stats(flightId: number, flight?: FlightData, selectio
       time: sample[0] / 1_000_000,
       axes,
       magnitude: Math.hypot(...axes),
+      rawMagnitude: Math.hypot(sample[1], sample[2], sample[3]),
       axis: config.axisIndex ? axes[config.axisIndex - 1] * config.sign : null,
     };
   });
@@ -137,15 +139,17 @@ export function get_flight_stats(flightId: number, flight?: FlightData, selectio
     : null;
   const baselineMagnitude = corrected.slice(0, baselineSamples.length)
     .reduce((sum, sample) => sum + sample.magnitude, 0) / baselineSamples.length;
+  const baselineRawMagnitude = corrected.slice(0, baselineSamples.length)
+    .reduce((sum, sample) => sum + sample.rawMagnitude, 0) / baselineSamples.length;
   const limit = flight.range_g * g;
-  const clipped = corrected.some((sample) => sample.magnitude >= limit * 0.98);
-  const peak = Math.max(...corrected.map((sample) => sample.magnitude));
+  const clipped = corrected.some((sample) => sample.rawMagnitude >= limit * 0.98);
+  const peak = Math.max(...corrected.map((sample) => sample.rawMagnitude));
   const freeFallWindows: Array<{ start: number; end: number }> = [];
   let freeFallStartIndex = -1;
   for (let index = 0; index < corrected.length; index += 1) {
-    if (corrected[index].magnitude >= 3) continue;
+    if (corrected[index].rawMagnitude >= 3) continue;
     const start = index;
-    while (index + 1 < corrected.length && corrected[index + 1].magnitude < 3) index += 1;
+    while (index + 1 < corrected.length && corrected[index + 1].rawMagnitude < 3) index += 1;
     if (corrected[index].time - corrected[start].time >= 0.3) {
       freeFallWindows.push({ start, end: index });
     }
@@ -156,7 +160,7 @@ export function get_flight_stats(flightId: number, flight?: FlightData, selectio
   if (freeFall) freeFallStartIndex = freeFall.start;
   const freeFallStart = freeFall ? corrected[freeFall.start] : null;
   const impactIndex = freeFall
-    ? corrected.findIndex((sample, index) => index > freeFall.end && sample.magnitude > 8 * g)
+    ? corrected.findIndex((sample, index) => index > freeFall.end && sample.rawMagnitude > 8 * g)
     : -1;
   const impact = impactIndex >= 0 ? corrected[impactIndex] : null;
   const flightSeconds = freeFallStart && impact ? impact.time - freeFallStart.time : null;
@@ -187,9 +191,9 @@ export function get_flight_stats(flightId: number, flight?: FlightData, selectio
     : config.angle === null
       ? "needs confirmed launch angle"
       : massReason;
-  if (flight.launchType === "launcher" && launch && burnSeconds && burnSeconds > 0 && config.axisIndex
+  if (launchType === "launcher" && launch && burnSeconds && burnSeconds > 0 && config.axisIndex
     && config.angle !== null && config.dryMass !== null && config.waterMass !== null) {
-    const burnSamples = corrected.slice(launchIndex, burnoutIndex >= 0 ? burnoutIndex + 1 : corrected.length);
+    const burnSamples = corrected.slice(freeFallStartIndex, burnoutIndex >= 0 ? burnoutIndex + 1 : corrected.length);
     let speed = 0;
     let thrustImpulse = 0;
     let thrustPeak = 0;
@@ -215,34 +219,34 @@ export function get_flight_stats(flightId: number, flight?: FlightData, selectio
     ? launchSpeed ** 2 * Math.sin(2 * config.angle) / g
     : null;
 
-  const nonLauncherReason = flight.launchType === "hand_throw"
+  const nonLauncherReason = launchType === "hand_throw"
     ? "Not applicable: hand throw has no thrust phase"
-    : flight.launchType === "drop_test"
+    : launchType === "drop_test"
       ? "Not applicable: drop test has no thrust phase"
-      : flight.launchType === "other"
+      : launchType === "other"
         ? "Not applicable: launch type is other / unknown"
         : null;
-  const releaseAcceleration = flight.launchType === "hand_throw" && freeFallStart
+  const releaseAcceleration = launchType === "hand_throw" && freeFallStart
     ? Math.max(...corrected
       .filter((sample) => sample.time >= freeFallStart.time - 0.5 && sample.time < freeFallStart.time)
-      .map((sample) => sample.magnitude), 0)
+      .map((sample) => sample.rawMagnitude), 0)
     : null;
 
   return {
     flightId,
     provenance: flight.provenance,
-    launchType: flight.launchType,
-    restingMagnitude: value(baselineMagnitude, "measured", "m/s^2", "Mean magnitude in the first 0.5 s; sanity check against 9.81 m/s^2."),
+    launchType,
+    restingMagnitude: value(baselineRawMagnitude, "measured", "m/s^2", "Mean raw magnitude in the first 0.5 s; sanity check against 9.81 m/s^2."),
     magnitude: value({ peak, clipped }, "measured", "m/s^2", "Magnitude is sqrt(ax^2 + ay^2 + az^2) for every sample."),
     freeFallStart: freeFallStart ? value(freeFallStart.time, "measured", "s", "Start of the longest acceleration-magnitude window below 3 m/s^2 lasting at least 0.3 s.") : missing("No free-fall window of at least 0.3 s was detected."),
     impactTime: impactSeconds !== null ? value(impactSeconds, "measured", "s", "First acceleration-magnitude spike above 8 g after free fall.") : missing("No impact spike above 8 g was detected after free fall."),
-    impactAcceleration: impact ? value(impact.magnitude, "measured", clipped ? "m/s^2 (lower bound)" : "m/s^2", "Acceleration magnitude at impact; clipping makes this a lower bound.") : missing("No impact acceleration was detected."),
+    impactAcceleration: impact ? value(impact.magnitude / g, "measured", clipped ? "g (lower bound)" : "g", "Impact acceleration in g; clipping makes this a lower bound.") : missing("No impact acceleration was detected."),
     roughApogee: flightSeconds !== null
       ? value(g * flightSeconds ** 2 / 8, "estimated", "m", "Estimated, assumes release and landing at the same height, no drag.")
       : missing("Free-fall start and impact are required."),
     releaseAcceleration: releaseAcceleration !== null ? value(releaseAcceleration, "measured", "m/s^2", "Peak acceleration magnitude in the 0.5 s before free-fall start.") : null,
     launchTime: launch ? value(launch.time, "measured", "s", "Free-fall start treated as release or launch.") : null,
-    burnTime: flight.launchType !== "launcher" ? missing(nonLauncherReason ?? "Not applicable.") : burnSeconds !== null
+    burnTime: launchType !== "launcher" ? missing(nonLauncherReason ?? "Not applicable.") : burnSeconds !== null
       ? value(burnSeconds, "estimated", "s", config.axisIndex
         ? "Launch to return near baseline on the confirmed long axis; the detector is approximate."
         : "Estimated from acceleration magnitude returning near baseline; the long axis is not confirmed.")
@@ -253,19 +257,19 @@ export function get_flight_stats(flightId: number, flight?: FlightData, selectio
     flightTime: flightSeconds !== null
       ? value(flightSeconds, "estimated", "s", "Launch to the final recorded sample, treated as the impact endpoint.")
       : missing("Free-fall start and impact are required."),
-    launchSpeed: flight.launchType !== "launcher" ? missing(nonLauncherReason ?? "Not applicable.")
+    launchSpeed: launchType !== "launcher" ? missing(nonLauncherReason ?? "Not applicable.")
       : launchSpeed !== null
       ? value(launchSpeed, "estimated", "m/s", "Trapezoidal integration of bias-corrected long-axis force minus g*sin(launch angle).")
       : missing(analysisReason ?? "Launch and burnout are required."),
-    peakThrust: flight.launchType !== "launcher" ? missing(nonLauncherReason ?? "Not applicable.")
+    peakThrust: launchType !== "launcher" ? missing(nonLauncherReason ?? "Not applicable.")
       : peakThrust !== null
       ? value(peakThrust, "estimated", "N", "Approximate T(t) = m(t)*f_axis using a linear water-mass model.")
       : missing(analysisReason ?? "Launch and burnout are required."),
-    impulse: flight.launchType !== "launcher" ? missing(nonLauncherReason ?? "Not applicable.")
+    impulse: launchType !== "launcher" ? missing(nonLauncherReason ?? "Not applicable.")
       : impulse !== null
       ? value(impulse, "estimated", "N s", "Integral of the approximate thrust; water mass decreases linearly.")
       : missing(analysisReason ?? "Launch and burnout are required."),
-    estimatedRange: flight.launchType !== "launcher" ? missing(nonLauncherReason ?? "Not applicable.")
+    estimatedRange: launchType !== "launcher" ? missing(nonLauncherReason ?? "Not applicable.")
       : range !== null
       ? value(range, "estimated", "m", "Projectile range with the configured launch angle; ignores drag and is an upper bound.")
       : missing(config.angle === null ? "needs confirmed launch angle" : "Launch speed is required."),

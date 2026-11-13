@@ -32,7 +32,7 @@ button,input { font:inherit; }
 .spec-grid strong { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
 .flight-panel { background:#1A1F1C; border:1px solid var(--line); border-radius:12px; padding:20px; box-shadow:0 3px 12px #00000018; }
 .flight-heading { display:flex; align-items:flex-start; justify-content:space-between; }
-.flight-heading h2 { font-size:17px; margin:7px 0 0; }
+.flight-heading h2 { font-size:17px; margin:7px 0 0; }.launch-type-tag { display:inline-block; color:var(--muted); border:1px solid var(--line); border-radius:4px; font-size:8px; font-weight:400; letter-spacing:.3px; padding:3px 5px; vertical-align:middle; }
 .flight-list { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
 .flight-list button,.flight-actions button,.paste-actions button { border:1px solid var(--line); border-radius:6px; background:var(--soft); color:var(--muted); padding:6px 9px; font-size:10px; cursor:pointer; }
 .flight-list button.selected,.flight-list button:hover,.flight-actions button:hover,.paste-actions button:hover { color:var(--ink); border-color:var(--green-hover); }
@@ -41,6 +41,7 @@ button,input { font:inherit; }
 .axis-toggles input,.paste-toggle input { accent-color:var(--orange); }
 .flight-chart { display:block; width:100%; height:auto; margin:18px 0 8px; background:#1A1F1C; }
 .flight-chart text { fill:var(--muted); font-size:9px; }
+.free-fall-window { fill:#6B8F5E; opacity:.18; }.impact-marker { stroke:#C4584C; stroke-width:1.5; stroke-dasharray:3 2; }
 .chart-grid { stroke:var(--line); stroke-width:1; }
 .acceleration-line { fill:none; stroke:#6B8F5E; stroke-width:3; stroke-linecap:round; stroke-linejoin:round; }
 .axis-line { fill:none; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; opacity:.8; }

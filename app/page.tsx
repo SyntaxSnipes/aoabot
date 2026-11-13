@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState, type PointerEvent } fr
 import Image from "next/image";
 import dynamic from "next/dynamic";
 import { rocketFacts, type FactStatus, type RocketFact } from "@/data/rocket-facts";
-import { get_flight_stats, type FlightData, type FlightProvenance, type FlightStats } from "@/lib/flightStats";
+import { get_flight_stats, type FlightData, type FlightProvenance, type FlightStats, type LaunchType, type StatsWindow } from "@/lib/flightStats";
 
 const RocketModelPanel = dynamic(() => import("./RocketModelPanel"), { ssr: false });
 
@@ -51,6 +51,13 @@ function provenanceLabel(provenance: FlightProvenance) {
   return provenance === "real" ? "REAL FLIGHT" : provenance === "demo" ? "DEMO DATA" : "UNVERIFIED SOURCE";
 }
 
+const launchTypeLabels: Record<LaunchType, string> = {
+  launcher: "Launcher (pressurized)",
+  hand_throw: "Hand throw",
+  drop_test: "Drop test",
+  other: "Other / unknown",
+};
+
 function SendIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 4 16 8-16 8 3.2-8L4 4Zm3.2 8h7.1" /></svg>;
 }
@@ -68,6 +75,7 @@ function validateFlightJson(text: string, metadata: {
   pressure: number;
   water: number;
   provenance: FlightProvenance;
+  launchType: LaunchType;
 }) {
   if (!text.trim()) return { error: "Paste JSON first" };
   if (text.length > 5 * 1024 * 1024) return { error: "Flight data is too large. Maximum size is about 5 MB." };
@@ -131,6 +139,7 @@ function validateFlightJson(text: string, metadata: {
       samples: canonicalSamples,
       date: new Date().toISOString().slice(0, 10),
       provenance: metadata.provenance,
+      launchType: metadata.launchType,
       label: metadata.label || `Flight ${source.flight_id}`,
       launch: { angle_deg: metadata.angle, pressure_bar: metadata.pressure, water_ml: metadata.water },
     } as FlightData & { label: string },
@@ -150,12 +159,19 @@ function FlightPanel({
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [visibleAxes, setVisibleAxes] = useState({ ax: false, ay: false, az: false });
+  const [smoothDisplay, setSmoothDisplay] = useState(false);
   const [zoom, setZoom] = useState<[number, number]>([0, 1]);
   const [dragStart, setDragStart] = useState<number | null>(null);
+  const [selectedWindow, setSelectedWindow] = useState<StatsWindow | undefined>();
   const samples = flight.samples.map(([t_us, ax, ay, az]) => ({ time: t_us / 1_000_000, ax, ay, az, magnitude: Math.hypot(ax, ay, az) }));
-  const renderedSamples = samples.length > 5000
-    ? samples.filter((_, index) => index % Math.ceil(samples.length / 5000) === 0)
-    : samples;
+  const smoothedSamples = samples.map((sample, index) => {
+    const window = samples.slice(Math.max(0, index - 1), Math.min(samples.length, index + 2));
+    return { ...sample, magnitude: window.reduce((sum, item) => sum + item.magnitude, 0) / window.length };
+  });
+  const chartSamples = smoothDisplay ? smoothedSamples : samples;
+  const renderedSamples = chartSamples.length > 5000
+    ? chartSamples.filter((_, index) => index % Math.ceil(chartSamples.length / 5000) === 0)
+    : chartSamples;
   const maxAcceleration = Math.max(...samples.map((item) => item.magnitude), 1);
   const maxTime = Math.max(...samples.map((item) => item.time), 1);
   const limit = flight.range_g * 9.80665;
@@ -187,6 +203,9 @@ function FlightPanel({
     const fraction = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
     return rangeStart + (fraction * (rangeEnd - rangeStart));
   };
+  const displayedStats = selectedWindow
+    ? get_flight_stats(flight.flight_id, flight, selectedWindow)
+    : stats;
 
   useEffect(() => {
     if (!isPlaying) return;
@@ -212,17 +231,20 @@ function FlightPanel({
   return (
     <div className="flight-panel" id="flight-panel">
       <div className="flight-heading">
-        <div><p className="eyebrow">FLIGHT TELEMETRY</p><h2>{flight.label ?? `Flight ${flight.flight_id}`}</h2></div>
+        <div><p className="eyebrow">FLIGHT TELEMETRY</p><h2>{flight.label ?? `Flight ${flight.flight_id}`} <span className="launch-type-tag">{launchTypeLabels[flight.launchType]}</span></h2></div>
         <span className={`provenance-pill ${flight.provenance}`}>{provenanceLabel(flight.provenance)}</span>
       </div>
       <div className="flight-actions"><button type="button" onClick={onPaste}>Paste data</button><button type="button" onClick={() => setZoom([0, 1])}>Reset zoom</button><button type="button" onClick={() => { const span = zoom[1] - zoom[0]; setZoom([Math.max(0, zoom[0] - span * .25), Math.max(span, zoom[1] - span * .25)]); }}>Pan left</button><button type="button" onClick={() => { const span = zoom[1] - zoom[0]; setZoom([Math.min(1 - span, zoom[0] + span * .25), Math.min(1, zoom[1] + span * .25)]); }}>Pan right</button></div>
       <div className="axis-toggles">{(["ax", "ay", "az"] as const).map((axis) => <label key={axis}><input type="checkbox" checked={visibleAxes[axis]} onChange={() => setVisibleAxes((current) => ({ ...current, [axis]: !current[axis] }))} /> {axis}</label>)}</div>
-      <svg className="flight-chart" viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label={`Acceleration magnitude over time for flight ${flight.flight_id}`} onPointerMove={(event) => { if (dragStart === null) setCurrentTime(pointFromEvent(event)); }} onPointerDown={(event) => setDragStart(pointFromEvent(event))} onPointerUp={(event) => { if (dragStart !== null) { const end = pointFromEvent(event); const start = Math.min(dragStart, end); const finish = Math.max(dragStart, end); if (finish - start > maxTime * 0.02) setZoom([start / maxTime, finish / maxTime]); } setDragStart(null); }}>
+      <label className="smooth-toggle"><input type="checkbox" checked={smoothDisplay} onChange={(event) => setSmoothDisplay(event.target.checked)} /> Smooth display (3 samples)</label>
+      <svg className="flight-chart" viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label={`Acceleration magnitude over time for flight ${flight.flight_id}`} onPointerMove={(event) => { if (dragStart === null) setCurrentTime(pointFromEvent(event)); }} onPointerDown={(event) => setDragStart(pointFromEvent(event))} onPointerUp={(event) => { if (dragStart !== null) { const end = pointFromEvent(event); const start = Math.min(dragStart, end); const finish = Math.max(dragStart, end); if (finish - start > maxTime * 0.02) { setSelectedWindow({ startTime: start, endTime: finish }); setZoom([0, 1]); } } setDragStart(null); }}>
         {[0, 0.25, 0.5, 0.75, 1].map((fraction) => (
           <line key={fraction} x1={pad} x2={chartWidth - pad / 2} y1={toY(Math.max(limit, maxAcceleration) * fraction)} y2={toY(Math.max(limit, maxAcceleration) * fraction)} className="chart-grid" />
         ))}
         <line x1={pad} x2={chartWidth - pad / 2} y1={toY(limit)} y2={toY(limit)} className="sensor-limit" />
+        {stats?.freeFallStart?.value !== null && stats?.freeFallStart && <rect x={toX(stats.freeFallStart.value)} y={14} width={Math.max(1, toX(stats.impactTime?.value ?? stats.freeFallStart.value) - toX(stats.freeFallStart.value))} height={chartHeight - pad - 14} className="free-fall-window" />}
         <line x1={toX(launchTime)} x2={toX(launchTime)} y1={14} y2={chartHeight - pad} className="flight-marker" />
+        {stats?.impactTime?.value !== null && stats?.impactTime && <line x1={toX(stats.impactTime.value)} x2={toX(stats.impactTime.value)} y1={14} y2={chartHeight - pad} className="impact-marker" />}
         {burnoutTime !== null && <line x1={toX(burnoutTime)} x2={toX(burnoutTime)} y1={14} y2={chartHeight - pad} className="flight-marker" />}
         <path d={pathFor("magnitude")} className="acceleration-line" />
         {visibleAxes.ax && <path d={pathFor("ax")} className="axis-line axis-x" />}
@@ -248,9 +270,9 @@ function FlightPanel({
         <div><span>AZ</span><strong>{point.az.toFixed(2)} m/s²</strong></div>
         <div><span>|A|</span><strong>{point.magnitude.toFixed(2)} m/s²</strong></div>
       </div>
-      {stats && <><div className="stats-table">{(["restingMagnitude", "magnitude", "launchTime", "burnTime", "peakAcceleration", "flightTime", "launchSpeed", "peakThrust", "impulse", "estimatedRange"] as const).map((key) => {
-        const stat = stats[key];
-        return <div className="stat-row" key={key} title={stat?.note ?? stats.reason}><span>{key.replace(/[A-Z]/g, (letter) => ` ${letter}`).toUpperCase()}</span><strong>{stat?.value === null || !stat ? "Not detected" : `${typeof stat.value === "number" ? stat.value.toFixed(2) : stat.value} ${stat.unit}`}</strong><em>{stat?.label ?? "estimated"}</em></div>;
+      {displayedStats && <><div className="stats-table">{(["restingMagnitude", "magnitude", "freeFallStart", "releaseAcceleration", "impactTime", "impactAcceleration", "roughApogee", "burnTime", "peakAcceleration", "flightTime", "launchSpeed", "peakThrust", "impulse", "estimatedRange"] as const).map((key) => {
+        const stat = displayedStats[key];
+        return <div className="stat-row" key={key} title={stat?.note ?? displayedStats.reason}><span>{key.replace(/[A-Z]/g, (letter) => ` ${letter}`).toUpperCase()}</span><strong>{stat?.value === null || !stat ? stat?.note ?? "Not detected" : `${typeof stat.value === "number" ? stat.value.toFixed(2) : stat.value} ${stat.unit}`}</strong><em>{stat?.label ?? "estimated"}</em></div>;
       })}</div><div className="range-arc"><svg viewBox="0 0 220 70" role="img" aria-label="Estimated projectile arc"><path d="M10 58 Q 110 0 210 58" /><line x1="10" y1="58" x2="210" y2="58" /><text x="110" y="68" textAnchor="middle">Estimated, ignores drag</text></svg></div></>}
     </div>
   );
@@ -273,6 +295,7 @@ export default function Home() {
   const [launchPressure, setLaunchPressure] = useState("");
   const [waterVolume, setWaterVolume] = useState("");
   const [pasteProvenance, setPasteProvenance] = useState<FlightProvenance>("unverified");
+  const [launchType, setLaunchType] = useState<LaunchType>("other");
   const [saveToBrowser, setSaveToBrowser] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -295,7 +318,10 @@ export default function Home() {
   useEffect(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("aoabot-flights") ?? "[]") as FlightData[];
-      if (Array.isArray(saved) && saved.length) window.setTimeout(() => setFlights((current) => [...current, ...saved]), 0);
+      if (Array.isArray(saved) && saved.length) {
+        const normalized = saved.map((flight) => ({ ...flight, launchType: flight.launchType ?? "other" }));
+        window.setTimeout(() => setFlights((current) => [...current, ...normalized]), 0);
+      }
     } catch {
       window.setTimeout(() => setPasteError("Saved browser flight data could not be read."), 0);
     }
@@ -325,6 +351,7 @@ export default function Home() {
       pressure: Number(launchPressure),
       water: Number(waterVolume),
       provenance: pasteProvenance,
+      launchType,
     });
     if (result.error || !result.flight) {
       setPasteError(result.error ?? "Could not load flight data.");
@@ -445,7 +472,7 @@ export default function Home() {
           <aside className="info-column">
             {snapshotFacts.some(([, fact]) => fact.status === "confirmed") && <div className="info-card snapshot"><div className="card-heading"><div><p className="eyebrow">AT A GLANCE</p><h2>Rocket snapshot</h2></div></div><div className="spec-grid">{snapshotFacts.filter(([, fact]) => fact.status === "confirmed").map(([label, fact]) => <div key={label}><span>{label}</span><strong>{fact.value}</strong><small>{fact.note}</small></div>)}</div><div className="not-confirmed"><span className="warning-icon">!</span><span>Unconfirmed design values are hidden</span></div></div>}
             <RocketModelPanel />
-            <div ref={flightPanelRef}>{flights.length > 0 && <div className="flight-list">{flights.map((flight) => <button type="button" className={flight.flight_id === selectedFlight?.flight_id ? "selected" : ""} key={flight.flight_id} onClick={() => selectFlight(flight.flight_id)}>{flight.label ?? `Flight ${flight.flight_id}`} · {provenanceLabel(flight.provenance)}</button>)}</div>}{selectedFlight ? <FlightPanel key={selectedFlight.flight_id} flight={selectedFlight} stats={selectedStats} onPaste={openPaste} /> : <div className="info-card no-flight">No flight loaded. Paste flight data.<button type="button" onClick={openPaste}>Paste data</button></div>}
+            <div ref={flightPanelRef}>{flights.length > 0 && <div className="flight-list">{flights.map((flight) => <button type="button" className={flight.flight_id === selectedFlight?.flight_id ? "selected" : ""} key={flight.flight_id} onClick={() => selectFlight(flight.flight_id)}>{flight.label ?? `Flight ${flight.flight_id}`} · {launchTypeLabels[flight.launchType]} · {provenanceLabel(flight.provenance)}</button>)}</div>}{selectedFlight ? <FlightPanel key={selectedFlight.flight_id} flight={selectedFlight} stats={selectedStats} onPaste={openPaste} /> : <div className="info-card no-flight">No flight loaded. Paste flight data.<button type="button" onClick={openPaste}>Paste data</button></div>}
               {pasteOpen && <div className="paste-panel">
                 <h3>Paste flight data</h3>
                 <textarea value={pasteText} onChange={(event) => setPasteText(event.target.value)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) readFile(file); }} placeholder='{"flight_id":2,"sample_rate_hz":200,"range_g":16,"units":"m/s^2","columns":["t_us","ax","ay","az"],"samples":[]}' />
@@ -453,6 +480,7 @@ export default function Home() {
                 <button type="button" onClick={() => fileInputRef.current?.click()}>Choose .json file</button>
                 <div className="paste-fields">
                   <label>Flight label<input value={flightLabel} onChange={(event) => setFlightLabel(event.target.value)} /></label>
+                  <label>Launch type<select required value={launchType} onChange={(event) => setLaunchType(event.target.value as LaunchType)}><option value="launcher">Launcher (pressurized)</option><option value="hand_throw">Hand throw</option><option value="drop_test">Drop test</option><option value="other">Other / unknown</option></select></label>
                   <label>Launch angle entered for this flight (deg)<input value={launchAngle} onChange={(event) => setLaunchAngle(event.target.value)} /> <UnconfirmedTag status={rocketFacts.launchAngle_deg.status} /></label>
                   <label>Launch pressure entered for this flight (bar)<input value={launchPressure} onChange={(event) => setLaunchPressure(event.target.value)} /> <UnconfirmedTag status={rocketFacts.launchPressure_bar.status} /></label>
                   <label>Water volume entered for this flight (mL)<input value={waterVolume} onChange={(event) => setWaterVolume(event.target.value)} /> <UnconfirmedTag status={rocketFacts.waterVolume_ml.status} /></label>
