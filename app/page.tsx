@@ -2,9 +2,8 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import Image from "next/image";
-import demoFlight from "@/data/flights/demo-synthetic.json";
-import { rocketFacts, type FactStatus, type RocketFact } from "@/data/rocket-facts";
-import { get_flight_stats, type FlightData, type FlightStats } from "@/lib/flightStats";
+import { rocketFacts, SAFETY_FACTS, type FactStatus, type RocketFact } from "@/data/rocket-facts";
+import { get_flight_stats, type FlightData, type FlightProvenance, type FlightStats } from "@/lib/flightStats";
 
 type Message = {
   id: number;
@@ -32,8 +31,12 @@ function AoaLogo() {
   return <Image src="/AOALogo.svg" alt="" width={202} height={146} aria-hidden="true" />;
 }
 
-function DemoTag({ status }: { status: FactStatus }) {
-  return status === "demo" ? <span className="demo-tag">DEMO</span> : null;
+function UnconfirmedTag({ status }: { status: FactStatus }) {
+  return status === "unconfirmed" ? <span className="demo-tag">UNCONFIRMED</span> : null;
+}
+
+function provenanceLabel(provenance: FlightProvenance) {
+  return provenance === "real" ? "REAL FLIGHT" : provenance === "demo" ? "DEMO DATA" : "UNVERIFIED SOURCE";
 }
 
 function SendIcon() {
@@ -52,7 +55,7 @@ function validateFlightJson(text: string, metadata: {
   angle: number;
   pressure: number;
   water: number;
-  isDemoData: boolean;
+  provenance: FlightProvenance;
 }) {
   if (!text.trim()) return { error: "Paste JSON first" };
   if (text.length > 5 * 1024 * 1024) return { error: "Flight data is too large. Maximum size is about 5 MB." };
@@ -115,7 +118,7 @@ function validateFlightJson(text: string, metadata: {
       columns: [...requiredColumns] as ["t_us", "ax", "ay", "az"],
       samples: canonicalSamples,
       date: new Date().toISOString().slice(0, 10),
-      isDemoData: metadata.isDemoData,
+      provenance: metadata.provenance,
       label: metadata.label || `Flight ${source.flight_id}`,
       launch: { angle_deg: metadata.angle, pressure_bar: metadata.pressure, water_ml: metadata.water },
     } as FlightData & { label: string },
@@ -198,7 +201,7 @@ function FlightPanel({
     <div className="flight-panel" id="flight-panel">
       <div className="flight-heading">
         <div><p className="eyebrow">FLIGHT TELEMETRY</p><h2>{flight.label ?? `Flight ${flight.flight_id}`}</h2></div>
-        {flight.isDemoData && <span className="demo-pill">DEMO DATA</span>}
+        <span className={`provenance-pill ${flight.provenance}`}>{provenanceLabel(flight.provenance)}</span>
       </div>
       <div className="flight-actions"><button type="button" onClick={onPaste}>Paste data</button><button type="button" onClick={() => setZoom([0, 1])}>Reset zoom</button><button type="button" onClick={() => { const span = zoom[1] - zoom[0]; setZoom([Math.max(0, zoom[0] - span * .25), Math.max(span, zoom[1] - span * .25)]); }}>Pan left</button><button type="button" onClick={() => { const span = zoom[1] - zoom[0]; setZoom([Math.min(1 - span, zoom[0] + span * .25), Math.min(1, zoom[1] + span * .25)]); }}>Pan right</button></div>
       <div className="axis-toggles">{(["ax", "ay", "az"] as const).map((axis) => <label key={axis}><input type="checkbox" checked={visibleAxes[axis]} onChange={() => setVisibleAxes((current) => ({ ...current, [axis]: !current[axis] }))} /> {axis}</label>)}</div>
@@ -246,19 +249,18 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
-  const initialFlight = demoFlight as unknown as FlightData;
-  const [flights, setFlights] = useState<FlightData[]>([initialFlight]);
-  const [selectedFlight, setSelectedFlight] = useState<FlightData>(initialFlight);
-  const [selectedStats, setSelectedStats] = useState<FlightStats>(() => get_flight_stats(initialFlight.flight_id, initialFlight));
+  const [flights, setFlights] = useState<FlightData[]>([]);
+  const [selectedFlight, setSelectedFlight] = useState<FlightData | null>(null);
+  const [selectedStats, setSelectedStats] = useState<FlightStats | undefined>();
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
   const [pasteError, setPasteError] = useState("");
   const [pasteWarnings, setPasteWarnings] = useState<string[]>([]);
-  const [flightLabel, setFlightLabel] = useState(`Flight ${initialFlight.flight_id}`);
-  const [launchAngle, setLaunchAngle] = useState(String(Number.parseFloat(rocketFacts.launchAngle_deg.value ?? "50")));
-  const [launchPressure, setLaunchPressure] = useState(String(Number.parseFloat(rocketFacts.launchPressure_bar.value ?? "5")));
-  const [waterVolume, setWaterVolume] = useState(String(Number.parseFloat(rocketFacts.waterVolume_ml.value ?? "500")));
-  const [pasteDemo, setPasteDemo] = useState(false);
+  const [flightLabel, setFlightLabel] = useState("Pasted flight");
+  const [launchAngle, setLaunchAngle] = useState("");
+  const [launchPressure, setLaunchPressure] = useState("");
+  const [waterVolume, setWaterVolume] = useState("");
+  const [pasteProvenance, setPasteProvenance] = useState<FlightProvenance>("unverified");
   const [saveToBrowser, setSaveToBrowser] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -310,7 +312,7 @@ export default function Home() {
       angle: Number(launchAngle),
       pressure: Number(launchPressure),
       water: Number(waterVolume),
-      isDemoData: pasteDemo,
+      provenance: pasteProvenance,
     });
     if (result.error || !result.flight) {
       setPasteError(result.error ?? "Could not load flight data.");
@@ -341,7 +343,9 @@ export default function Home() {
   function deleteSavedFlights() {
     try {
       localStorage.removeItem("aoabot-flights");
-      setFlights((current) => current.filter((flight) => flight === initialFlight));
+      setFlights([]);
+      setSelectedFlight(null);
+      setSelectedStats(undefined);
     } catch {
       setPasteError("Could not clear saved browser flights.");
     }
@@ -387,13 +391,10 @@ export default function Home() {
 
   const snapshotFacts = useMemo(() => [
     ["BOTTLE", rocketFacts.bottle],
-    ["LENGTH", rocketFacts.length],
-    ["DRY MASS", rocketFacts.dryMass_kg],
-    ["WATER MASS", rocketFacts.waterMass_kg],
-    ["LONG AXIS", rocketFacts.longAxis],
-    ["AXIS SIGN", rocketFacts.axisSign],
-    ["LAUNCH ANGLE", rocketFacts.launchAngle_deg],
-    ["WATER VOLUME", rocketFacts.waterVolume_ml],
+    ["NOSE CONE", rocketFacts.noseCone],
+    ["OTHER PARTS", rocketFacts.otherParts],
+    ["ELECTRONICS", rocketFacts.electronics],
+    ["ELECTRONICS MASS", rocketFacts.electronicsMass],
   ] as ReadonlyArray<readonly [string, RocketFact<string | null>]>, []);
 
   return (
@@ -410,13 +411,16 @@ export default function Home() {
               {messages.map((message) => (
                 <div className={`message-row ${message.role} ${message.role === "bot" && /safety|goggles|pressur|authorized|rope/i.test(message.text) ? "safety-answer" : ""}`} key={message.id}>
                   {message.role === "bot" && <div className="tiny-avatar"><AoaLogo /></div>}
-                  <div className="message-bubble"><p>{message.text}</p>{message.stats && <div className="computed-tag">Computed from {message.stats.flightId}{message.stats.isDemoData && " · Demo data"}</div>}<time>{message.role === "bot" ? "Answer" : "You"}</time></div>
+                  <div className="message-bubble"><p>{message.text}</p>{message.stats && <div className="computed-tag">Computed from flight {message.stats.flightId} · {provenanceLabel(message.stats.provenance).toLowerCase()}</div>}<time>{message.role === "bot" ? "AOABot" : "You"}</time></div>
                 </div>
               ))}
               {isLoading && <div className="typing-indicator"><span /><span /><span /> Thinking…</div>}
               <div ref={messagesEndRef} />
             </div>
-            <div className="quick-ask"><p>TRY ASKING</p><div>{quickQuestions.map((question) => <button key={question} onClick={() => submit(question)}>{question}</button>)}</div></div>
+            <div className="quick-ask"><p>TRY ASKING</p><div>{quickQuestions.map((question) => {
+              const needsFlight = question !== "What are the safety rules?";
+              return <button key={question} disabled={needsFlight && !selectedFlight} onClick={() => submit(question)}>{question}</button>;
+            })}</div></div>
             <form className="composer" onSubmit={(event: FormEvent<HTMLFormElement>) => { event.preventDefault(); submit(input); }}>
               <input aria-label="Ask about the water rocket" maxLength={2000} value={input} onChange={(event) => setInput(event.target.value)} placeholder="Ask a question about our water rocket..." />
               <button aria-label="Send question" type="submit" disabled={isLoading}><SendIcon /></button>
@@ -425,8 +429,8 @@ export default function Home() {
             <p className="disclaimer">Answers come from TeamAOA project data. Unconfirmed values are marked.</p>
           </section>
           <aside className="info-column">
-            <div className="info-card snapshot"><div className="card-heading"><div><p className="eyebrow">AT A GLANCE</p><h2>Rocket snapshot</h2></div></div><div className="spec-grid">{snapshotFacts.map(([label, fact]) => <div key={label}><span>{label}</span><strong>{fact.value} <DemoTag status={fact.status} /></strong><small>{fact.note}</small></div>)}</div><div className="pressure-row"><span>LAUNCH PRESSURE</span><strong>{rocketFacts.launchPressure_bar.value} <DemoTag status={rocketFacts.launchPressure_bar.status} /><em> gauge</em></strong></div><div className="not-confirmed"><span className="warning-icon">!</span><span>Measured range <strong>not yet available</strong></span></div></div>
-            <div ref={flightPanelRef}><div className="flight-list">{flights.map((flight) => <button type="button" className={flight.flight_id === selectedFlight.flight_id ? "selected" : ""} key={flight.flight_id} onClick={() => selectFlight(flight.flight_id)}>{flight.label ?? `Flight ${flight.flight_id}`}{flight.isDemoData && " · DEMO"}</button>)}</div><FlightPanel key={selectedFlight.flight_id} flight={selectedFlight} stats={selectedStats} onPaste={openPaste} />
+            {snapshotFacts.some(([, fact]) => fact.status === "confirmed") && <div className="info-card snapshot"><div className="card-heading"><div><p className="eyebrow">AT A GLANCE</p><h2>Rocket snapshot</h2></div></div><div className="spec-grid">{snapshotFacts.filter(([, fact]) => fact.status === "confirmed").map(([label, fact]) => <div key={label}><span>{label}</span><strong>{fact.value}</strong><small>{fact.note}</small></div>)}</div><div className="not-confirmed"><span className="warning-icon">!</span><span>Unconfirmed design values are hidden</span></div></div>}
+            <div ref={flightPanelRef}>{flights.length > 0 && <div className="flight-list">{flights.map((flight) => <button type="button" className={flight.flight_id === selectedFlight?.flight_id ? "selected" : ""} key={flight.flight_id} onClick={() => selectFlight(flight.flight_id)}>{flight.label ?? `Flight ${flight.flight_id}`} · {provenanceLabel(flight.provenance)}</button>)}</div>}{selectedFlight ? <FlightPanel key={selectedFlight.flight_id} flight={selectedFlight} stats={selectedStats} onPaste={openPaste} /> : <div className="info-card no-flight">No flight loaded. Paste flight data.<button type="button" onClick={openPaste}>Paste data</button></div>}
               {pasteOpen && <div className="paste-panel">
                 <h3>Paste flight data</h3>
                 <textarea value={pasteText} onChange={(event) => setPasteText(event.target.value)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const file = event.dataTransfer.files[0]; if (file) readFile(file); }} placeholder='{"flight_id":2,"sample_rate_hz":200,"range_g":16,"units":"m/s^2","columns":["t_us","ax","ay","az"],"samples":[]}' />
@@ -434,11 +438,11 @@ export default function Home() {
                 <button type="button" onClick={() => fileInputRef.current?.click()}>Choose .json file</button>
                 <div className="paste-fields">
                   <label>Flight label<input value={flightLabel} onChange={(event) => setFlightLabel(event.target.value)} /></label>
-                  <label>Launch angle (deg)<input value={launchAngle} onChange={(event) => setLaunchAngle(event.target.value)} /> <DemoTag status={rocketFacts.launchAngle_deg.status} /></label>
-                  <label>Launch pressure (bar)<input value={launchPressure} onChange={(event) => setLaunchPressure(event.target.value)} /> <DemoTag status={rocketFacts.launchPressure_bar.status} /></label>
-                  <label>Water volume (mL)<input value={waterVolume} onChange={(event) => setWaterVolume(event.target.value)} /> <DemoTag status={rocketFacts.waterVolume_ml.status} /></label>
+                  <label>Launch angle (deg)<input value={launchAngle} onChange={(event) => setLaunchAngle(event.target.value)} /> <UnconfirmedTag status={rocketFacts.launchAngle_deg.status} /></label>
+                  <label>Launch pressure (bar)<input value={launchPressure} onChange={(event) => setLaunchPressure(event.target.value)} /> <UnconfirmedTag status={rocketFacts.launchPressure_bar.status} /></label>
+                  <label>Water volume (mL)<input value={waterVolume} onChange={(event) => setWaterVolume(event.target.value)} /> <UnconfirmedTag status={rocketFacts.waterVolume_ml.status} /></label>
                 </div>
-                <label className="paste-toggle"><input type="checkbox" checked={pasteDemo} onChange={(event) => setPasteDemo(event.target.checked)} /> This is demo/synthetic data</label>
+                <label className="paste-toggle">Source label<select value={pasteProvenance} onChange={(event) => setPasteProvenance(event.target.value as FlightProvenance)}><option value="unverified">Unverified source</option><option value="demo">Demo data</option><option value="real">Real flight</option></select></label>
                 <label className="paste-toggle"><input type="checkbox" checked={saveToBrowser} onChange={(event) => setSaveToBrowser(event.target.checked)} /> Save to this browser</label>
                 <div className="paste-actions"><button type="button" onClick={loadPastedFlight}>Load</button><button type="button" onClick={() => setPasteOpen(false)}>Cancel</button><button type="button" onClick={deleteSavedFlights}>Clear saved</button></div>
                 {pasteError && <p className="chat-error" role="alert">{pasteError}</p>}
@@ -446,7 +450,7 @@ export default function Home() {
               </div>}
               {!pasteOpen && pasteWarnings.map((warning) => <p className="paste-warning" key={warning}>{warning}</p>)}
             </div>
-            <div className="safety-strip" id="safety"><strong>Safety</strong><span>Goggles during pressurization</span><span>Stay 4.6 m (15 ft) behind the rope</span><span>Never handle a pressurized rocket</span><span>Inspect the bottle before launch</span><small>Only authorized people operate the pump and launcher.</small></div>
+            <div className="safety-strip" id="safety"><strong>Safety</strong>{SAFETY_FACTS.map((fact) => <span key={fact}>{fact}</span>)}</div>
           </aside>
         </div>
       </section>
