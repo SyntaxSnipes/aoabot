@@ -21,7 +21,7 @@ export const SAFETY_FACTS = [
 
 export const rocketFacts: Record<string, RocketFact<string | null>> = {
   bottle: {
-    value: "1.5 L",
+    value: "1.25 L",
     status: "confirmed",
     note: "Reused PET soft-drink bottle",
   },

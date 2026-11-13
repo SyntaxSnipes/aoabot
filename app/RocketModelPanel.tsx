@@ -2,13 +2,13 @@
 
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls, useGLTF } from "@react-three/drei";
-import { Component, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
+import { Component, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 
 const MODEL_PATHS = {
-  v1: "/models/rocket-v1.glb",
-  v2: "/models/rocket-v2.glb",
+  v1: "/models/rocket-v1.glb?v=1",
+  v2: "/models/rocket-v2.glb?v=2",
 } as const;
 
 type Version = keyof typeof MODEL_PATHS;
@@ -32,25 +32,85 @@ class ViewerErrorBoundary extends Component<
   }
 }
 
-function FitModel({ path }: { path: string }) {
-  const { scene } = useGLTF(path);
-  const group = useRef<THREE.Group>(null);
+type ModelInfo = {
+  scene: THREE.Group;
+  bounds: THREE.Box3;
+  size: THREE.Vector3;
+  center: THREE.Vector3;
+};
 
-  useEffect(() => {
-    const root = group.current;
-    if (!root) return;
-    const bounds = new THREE.Box3().setFromObject(root);
-    const size = bounds.getSize(new THREE.Vector3());
-    const center = bounds.getCenter(new THREE.Vector3());
-    const largestSide = Math.max(size.x, size.y, size.z);
-    root.scale.setScalar(largestSide > 0 ? 2.4 / largestSide : 1);
-    root.position.set(-center.x, -center.y, -center.z);
-  }, [scene]);
-
-  return <group ref={group}><primitive object={scene} /></group>;
+function inspectModel(version: Version, scene: THREE.Group): ModelInfo {
+  scene.updateMatrixWorld(true);
+  let meshCount = 0;
+  let cameraCount = 0;
+  let lightCount = 0;
+  let emptyCount = 0;
+  const bounds = new THREE.Box3();
+  scene.traverse((node) => {
+    if (node instanceof THREE.Mesh) {
+      meshCount += 1;
+      const meshBounds = new THREE.Box3().setFromObject(node);
+      bounds.union(meshBounds);
+    } else if (node instanceof THREE.Camera) {
+      cameraCount += 1;
+    } else if (node instanceof THREE.Light) {
+      lightCount += 1;
+    } else {
+      emptyCount += 1;
+    }
+  });
+  const nodeCount = meshCount + cameraCount + lightCount + emptyCount;
+  const size = bounds.getSize(new THREE.Vector3());
+  const center = bounds.getCenter(new THREE.Vector3());
+  const valid = bounds.isEmpty() || ![...size, ...center].every(Number.isFinite) ? false : true;
+  console.info(`[RocketModel] ${JSON.stringify({
+    url: MODEL_PATHS[version],
+    nodes: nodeCount,
+    mesh: meshCount,
+    camera: cameraCount,
+    light: lightCount,
+    empty: emptyCount,
+    min: bounds.min.toArray(),
+    max: bounds.max.toArray(),
+    size: size.toArray(),
+  })}`);
+  if (!valid) {
+    throw new Error(`Invalid mesh bounds for ${MODEL_PATHS[version]}`);
+  }
+  return { scene, bounds, size, center };
 }
 
-function ViewerScene({ path, autoRotate, onInteract }: { path: string; autoRotate: boolean; onInteract: () => void }) {
+function FitModels({ version }: { version: Version }) {
+  const v1 = useGLTF(MODEL_PATHS.v1).scene;
+  const v2 = useGLTF(MODEL_PATHS.v2).scene;
+  const models = useMemo(() => ({
+    v1: inspectModel("v1", v1),
+    v2: inspectModel("v2", v2),
+  }), [v1, v2]);
+  const largestHeight = Math.max(models.v1.size.y, models.v2.size.y);
+  const active = models[version];
+  const scale = 2.4 / largestHeight;
+  const position: [number, number, number] = [
+    -active.center.x * scale,
+    -active.center.y * scale,
+    -active.center.z * scale,
+  ];
+
+  useEffect(() => {
+    if (!Number.isFinite(largestHeight) || largestHeight <= 0) {
+      throw new Error(`Invalid shared model height for ${MODEL_PATHS[version]}`);
+    }
+    if (models.v1.size.y > models.v2.size.y * 3) {
+      console.warn(`[RocketModel] ${MODEL_PATHS.v1} mesh height is more than 3x ${MODEL_PATHS.v2}`);
+    } else if (models.v2.size.y > models.v1.size.y * 3) {
+      console.warn(`[RocketModel] ${MODEL_PATHS.v2} mesh height is more than 3x ${MODEL_PATHS.v1}`);
+    }
+  }, [largestHeight, models, version]);
+
+  return <group position={position} scale={scale}><primitive object={active.scene} /></group>;
+}
+
+function ViewerScene({ version, autoRotate, onInteract }: { version: Version; autoRotate: boolean; onInteract: () => void }) {
   const controls = useRef<OrbitControlsImpl>(null);
 
   useEffect(() => {
@@ -65,7 +125,7 @@ function ViewerScene({ path, autoRotate, onInteract }: { path: string; autoRotat
       <directionalLight position={[4, 5, 6]} intensity={3} />
       <directionalLight position={[-3, 1, -4]} intensity={1} />
       <Suspense fallback={null}>
-        <FitModel path={path} />
+        <FitModels version={version} />
       </Suspense>
       <OrbitControls
         ref={controls}
@@ -84,12 +144,12 @@ function ViewerScene({ path, autoRotate, onInteract }: { path: string; autoRotat
 }
 
 function VisibilityCanvas({
-  path,
+  version,
   active,
   onInteract,
   autoRotate,
 }: {
-  path: string;
+  version: Version;
   active: boolean;
   autoRotate: boolean;
   onInteract: () => void;
@@ -102,7 +162,7 @@ function VisibilityCanvas({
       gl={{ alpha: false, antialias: true }}
       onCreated={({ gl }) => gl.setClearColor("#1A1F1C", 1)}
     >
-      <ViewerScene path={path} autoRotate={autoRotate} onInteract={onInteract} />
+      <ViewerScene version={version} autoRotate={autoRotate} onInteract={onInteract} />
     </Canvas>
   );
 }
@@ -182,7 +242,7 @@ export default function RocketModelPanel() {
         {available === false && <div className="model-placeholder">Model files not added yet</div>}
         {available === true && (
           <ViewerErrorBoundary>
-            <VisibilityCanvas path={MODEL_PATHS[version]} active={visible} autoRotate={autoRotate} onInteract={() => setAutoRotate(false)} />
+            <VisibilityCanvas version={version} active={visible} autoRotate={autoRotate} onInteract={() => setAutoRotate(false)} />
           </ViewerErrorBoundary>
         )}
       </div>
@@ -190,6 +250,7 @@ export default function RocketModelPanel() {
         <span>Drag to rotate. Scroll or pinch to zoom.</span>
         {available && <button type="button" onClick={resetView}>Reset view</button>}
       </div>
+      <small className="model-disclaimer">Models show simplified geometry and are not manufacturing or flight-certified representations.</small>
     </div>
   );
 }
