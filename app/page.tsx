@@ -364,7 +364,7 @@ export default function Home() {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: history.slice(-30).map(({ role, text }) => ({ role: role === "bot" ? "assistant" : "user", content: text })), flight: selectedFlight }),
+        body: JSON.stringify({ messages: history.slice(-30).map(({ role, text }) => ({ role: role === "bot" ? "assistant" : "user", content: text })), flight: selectedFlight, flights }),
       });
       const result = await response.json() as { message?: string; error?: string; showSimulation?: { flightId?: number; flight?: FlightData }; flightStats?: FlightStats };
       if (!response.ok || !result.message) throw new Error(result.error ?? "AOABot could not answer right now.");
@@ -438,9 +438,9 @@ export default function Home() {
                 <button type="button" onClick={() => fileInputRef.current?.click()}>Choose .json file</button>
                 <div className="paste-fields">
                   <label>Flight label<input value={flightLabel} onChange={(event) => setFlightLabel(event.target.value)} /></label>
-                  <label>Launch angle (deg)<input value={launchAngle} onChange={(event) => setLaunchAngle(event.target.value)} /> <UnconfirmedTag status={rocketFacts.launchAngle_deg.status} /></label>
-                  <label>Launch pressure (bar)<input value={launchPressure} onChange={(event) => setLaunchPressure(event.target.value)} /> <UnconfirmedTag status={rocketFacts.launchPressure_bar.status} /></label>
-                  <label>Water volume (mL)<input value={waterVolume} onChange={(event) => setWaterVolume(event.target.value)} /> <UnconfirmedTag status={rocketFacts.waterVolume_ml.status} /></label>
+                  <label>Launch angle entered for this flight (deg)<input value={launchAngle} onChange={(event) => setLaunchAngle(event.target.value)} /> <UnconfirmedTag status={rocketFacts.launchAngle_deg.status} /></label>
+                  <label>Launch pressure entered for this flight (bar)<input value={launchPressure} onChange={(event) => setLaunchPressure(event.target.value)} /> <UnconfirmedTag status={rocketFacts.launchPressure_bar.status} /></label>
+                  <label>Water volume entered for this flight (mL)<input value={waterVolume} onChange={(event) => setWaterVolume(event.target.value)} /> <UnconfirmedTag status={rocketFacts.waterVolume_ml.status} /></label>
                 </div>
                 <label className="paste-toggle">Source label<select value={pasteProvenance} onChange={(event) => setPasteProvenance(event.target.value as FlightProvenance)}><option value="unverified">Unverified source</option><option value="demo">Demo data</option><option value="real">Real flight</option></select></label>
                 <label className="paste-toggle"><input type="checkbox" checked={saveToBrowser} onChange={(event) => setSaveToBrowser(event.target.checked)} /> Save to this browser</label>
