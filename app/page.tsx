@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState, type PointerEvent } fr
 import Image from "next/image";
 import dynamic from "next/dynamic";
 import { rocketFacts, type FactStatus, type RocketFact } from "@/data/rocket-facts";
-import { get_flight_stats, type FlightData, type FlightProvenance, type FlightStats, type LaunchType, type StatsWindow } from "@/lib/flightStats";
+import { get_flight_stats, type FlightData, type FlightProvenance, type FlightStats, type LaunchType, type StatsWindow, type MissingDataRange } from "@/lib/flightStats";
 
 const RocketModelPanel = dynamic(() => import("./RocketModelPanel"), { ssr: false });
 
@@ -96,7 +96,7 @@ function validateFlightJson(text: string, metadata: {
   if (!Array.isArray(columns) || !requiredColumns.every((column) => columns.includes(column))) {
     return { error: 'Required columns must include "t_us", "ax", "ay", and "az".' };
   }
-  if (!Array.isArray(samples) || samples.length === 0 || !samples.every(Array.isArray)) {
+  if (!Array.isArray(samples) || samples.length === 0) {
     return { error: "samples must be a non-empty array of arrays." };
   }
   if (typeof source.sample_rate_hz !== "number" || !Number.isFinite(source.sample_rate_hz)
@@ -104,29 +104,87 @@ function validateFlightJson(text: string, metadata: {
     return { error: "sample_rate_hz and range_g must be finite numbers." };
   }
   const indexes = Object.fromEntries(requiredColumns.map((column) => [column, columns.indexOf(column)]));
-  const canonicalSamples: [number, number, number, number][] = [];
+  const canonicalSamples: [number, number | null, number | null, number | null][] = [];
+  const missingDataIndices: number[] = [];
+  const restartTimes: number[] = [];
+  let duplicateRowsRemoved = 0;
+  let previousRawTime: number | null = null;
+  let lastAdjustedTime: number | null = null;
+  const sampleInterval = Number(source.sample_rate_hz) > 0
+    ? 1_000_000 / Number(source.sample_rate_hz)
+    : 0;
+  const accelerationScale = source.units === "g" ? 9.80665 : 1;
+  let timeOffset = 0;
   for (let rowIndex = 0; rowIndex < samples.length; rowIndex += 1) {
+    if (!Array.isArray(samples[rowIndex])) return { error: `Row ${rowIndex} must be an array.` };
     const row = samples[rowIndex] as unknown[];
     if (row.length !== columns.length) return { error: `Row ${rowIndex} must contain exactly ${columns.length} values.` };
     const values = requiredColumns.map((column) => row[indexes[column]]);
-    if (!values.every((item) => typeof item === "number" && Number.isFinite(item))) {
-      return { error: `Row ${rowIndex} contains a non-finite sample value.` };
+    const rawTime = values[0];
+    if (typeof rawTime !== "number" || !Number.isFinite(rawTime)) {
+      return { error: `Row ${rowIndex} contains a non-numeric t_us value.` };
     }
-    if (rowIndex > 0 && (values[0] as number) <= canonicalSamples[rowIndex - 1][0]) {
-      return { error: `Time is not strictly increasing at row ${rowIndex}.` };
+    if (previousRawTime !== null && rawTime === previousRawTime) {
+      duplicateRowsRemoved += 1;
+      continue;
     }
-    canonicalSamples.push(values as [number, number, number, number]);
+    if (previousRawTime !== null && rawTime < previousRawTime) {
+      timeOffset = (lastAdjustedTime ?? 0) + sampleInterval;
+      restartTimes.push((rawTime + timeOffset) / 1_000_000);
+    }
+    const adjustedTime = rawTime + timeOffset;
+    const axes = values.slice(1);
+    if (!axes.every((item) => item === null || (typeof item === "number" && Number.isFinite(item)))) {
+      return { error: `Row ${rowIndex} contains a non-numeric non-null sample value.` };
+    }
+    const isMissing = axes.some((item) => item === null)
+      || axes.every((item) => item === 0);
+    canonicalSamples.push([
+      adjustedTime,
+      axes[0] === null ? null : (axes[0] as number) * accelerationScale,
+      axes[1] === null ? null : (axes[1] as number) * accelerationScale,
+      axes[2] === null ? null : (axes[2] as number) * accelerationScale,
+    ]);
+    if (isMissing) missingDataIndices.push(canonicalSamples.length - 1);
+    previousRawTime = rawTime;
+    lastAdjustedTime = adjustedTime;
+  }
+  const missingDataRanges: MissingDataRange[] = [];
+  for (const index of missingDataIndices) {
+    const time = canonicalSamples[index][0] / 1_000_000;
+    const previous = missingDataRanges[missingDataRanges.length - 1];
+    if (previous && time - previous.endTime <= Math.max(sampleInterval / 1_000_000 * 1.5, 0.02)) {
+      previous.endTime = time;
+    } else {
+      missingDataRanges.push({ startTime: time, endTime: time });
+    }
   }
   const warnings: string[] = [];
   if (source.units === undefined) warnings.push("Units were missing; assumed m/s^2.");
-  const spacings = canonicalSamples.slice(1).map((row, index) => row[0] - canonicalSamples[index][0]).sort((a, b) => a - b);
+  if (source.units === "g") warnings.push("Acceleration converted from g to m/s^2.");
+  const spacings = canonicalSamples.slice(1).map((row, index) => row[0] - canonicalSamples[index][0]).filter((spacing) => spacing > 0).sort((a, b) => a - b);
   const medianSpacing = spacings.length ? spacings[Math.floor(spacings.length / 2)] : 0;
   if (medianSpacing && Math.abs(1_000_000 / medianSpacing - Number(source.sample_rate_hz)) / Number(source.sample_rate_hz) > 0.1) {
     warnings.push("Median sample spacing disagrees with sample_rate_hz by more than 10%.");
   }
-  const resting = canonicalSamples.slice(0, 20).reduce((sum, row) => sum + Math.hypot(row[1], row[2], row[3]), 0) / Math.min(20, canonicalSamples.length);
+  const restingSamples = canonicalSamples.filter((row) => row[1] !== null && row[2] !== null && row[3] !== null).slice(0, 20);
+  const resting = restingSamples.reduce((sum, row) => sum + Math.hypot(row[1]!, row[2]!, row[3]!), 0) / Math.max(1, restingSamples.length);
   if (Math.abs(resting - 9.80665) / 9.80665 > 0.1) warnings.push("Resting magnitude is not within 10% of 9.81 m/s^2; check units or range.");
   if (canonicalSamples.length < 100) warnings.push(`Only ${canonicalSamples.length} samples; results may be limited.`);
+  if (duplicateRowsRemoved) warnings.push(`${duplicateRowsRemoved} duplicate rows removed`);
+  if (restartTimes.length) warnings.push(`${restartTimes.length} restarts`);
+  if (missingDataIndices.length) {
+    const percentage = (missingDataIndices.length / canonicalSamples.length * 100).toFixed(1);
+    const finalTime = canonicalSamples[canonicalSamples.length - 1][0] / 1_000_000;
+    const ranges = missingDataRanges.map((range) => range.startTime === range.endTime
+      ? `${range.startTime.toFixed(2)} s`
+      : range.endTime === finalTime
+        ? `${range.startTime.toFixed(2)} s to the end`
+        : `${range.startTime.toFixed(2)} to ${range.endTime.toFixed(2)} s`).join(", ");
+    warnings.push(`${missingDataIndices.length} of ${canonicalSamples.length} samples (${percentage}%) are missing data and were excluded${ranges ? ` (${ranges})` : ""}`);
+  }
+  const longGaps = spacings.filter((spacing) => spacing > 20_000).length;
+  if (longGaps) warnings.push(`${longGaps} gaps over 20 ms detected.`);
   const ignored = ["altitude", "pitch"].filter((column) => columns.includes(column));
   if (ignored.length) warnings.push(`${ignored.join(" and ")} column${ignored.length > 1 ? "s were" : " was"} ignored; the bot does not use ${ignored.join(" or ")}.`);
   return {
@@ -136,7 +194,12 @@ function validateFlightJson(text: string, metadata: {
       range_g: Number(source.range_g),
       units: "m/s^2" as const,
       columns: [...requiredColumns] as ["t_us", "ax", "ay", "az"],
-      samples: canonicalSamples,
+      samples: canonicalSamples as FlightData["samples"],
+      missingDataIndices,
+      missingDataRanges,
+      restartTimes,
+      duplicateRowsRemoved,
+      totalRows: samples.length,
       date: new Date().toISOString().slice(0, 10),
       provenance: metadata.provenance,
       launchType: metadata.launchType,
@@ -163,16 +226,24 @@ function FlightPanel({
   const [zoom, setZoom] = useState<[number, number]>([0, 1]);
   const [dragStart, setDragStart] = useState<number | null>(null);
   const [selectedWindow, setSelectedWindow] = useState<StatsWindow | undefined>();
-  const samples = flight.samples.map(([t_us, ax, ay, az]) => ({ time: t_us / 1_000_000, ax, ay, az, magnitude: Math.hypot(ax, ay, az) }));
+  const samples = flight.samples.map(([t_us, ax, ay, az]) => ({
+    time: t_us / 1_000_000,
+    ax,
+    ay,
+    az,
+    magnitude: ax === null || ay === null || az === null ? null : Math.hypot(ax, ay, az),
+  }));
   const smoothedSamples = samples.map((sample, index) => {
+    if (sample.magnitude === null) return sample;
     const window = samples.slice(Math.max(0, index - 1), Math.min(samples.length, index + 2));
-    return { ...sample, magnitude: window.reduce((sum, item) => sum + item.magnitude, 0) / window.length };
+    const validWindow = window.filter((item) => item.magnitude !== null);
+    return { ...sample, magnitude: validWindow.reduce((sum, item) => sum + (item.magnitude ?? 0), 0) / validWindow.length };
   });
   const chartSamples = smoothDisplay ? smoothedSamples : samples;
   const renderedSamples = chartSamples.length > 5000
     ? chartSamples.filter((_, index) => index % Math.ceil(chartSamples.length / 5000) === 0)
     : chartSamples;
-  const maxAcceleration = Math.max(...samples.map((item) => item.magnitude), 1);
+  const maxAcceleration = Math.max(...samples.map((item) => item.magnitude ?? 0), 1);
   const maxTime = Math.max(...samples.map((item) => item.time), 1);
   const limit = flight.range_g * 9.80665;
   const chartWidth = 520;
@@ -184,19 +255,27 @@ function FlightPanel({
   const toY = (acceleration: number) => chartHeight - pad - (acceleration / Math.max(limit, maxAcceleration) * (chartHeight - pad * 1.7));
   const pathFor = (key: "magnitude" | "ax" | "ay" | "az") => renderedSamples
     .filter((item) => item.time >= rangeStart && item.time <= rangeEnd)
-    .map((item, pointIndex) => `${pointIndex ? "L" : "M"} ${toX(item.time)} ${toY(item[key])}`).join(" ");
+    .map((item, pointIndex, visibleSamples) => {
+      const previous = visibleSamples[pointIndex - 1];
+      const value = item[key];
+      const restartBetween = previous && (flight.restartTimes ?? []).some((time) => time > previous.time && time <= item.time);
+      if (value === null) return "M";
+      const startsSegment = pointIndex === 0 || !previous || previous[key] === null || restartBetween;
+      return `${startsSegment ? "M" : "L"} ${toX(item.time)} ${toY(value)}`;
+    }).join(" ");
   const launchTime = stats?.launchTime?.value ?? 0;
   const burnoutTime = stats?.burnTime?.value && stats.launchTime?.value ? stats.launchTime.value + stats.burnTime.value : null;
-  const nextPoint = samples.find((item) => item.time >= currentTime) ?? samples[samples.length - 1];
-  const previousPoint = samples[samples.indexOf(nextPoint) - 1] ?? nextPoint;
+  const playableSamples = samples.filter((sample) => sample.magnitude !== null);
+  const nextPoint = playableSamples.find((item) => item.time >= currentTime) ?? playableSamples[playableSamples.length - 1];
+  const previousPoint = playableSamples[playableSamples.indexOf(nextPoint) - 1] ?? nextPoint;
   const segmentLength = nextPoint.time - previousPoint.time;
   const segmentProgress = segmentLength === 0 ? 0 : (currentTime - previousPoint.time) / segmentLength;
   const point = {
     time: currentTime,
-    ax: previousPoint.ax + (nextPoint.ax - previousPoint.ax) * segmentProgress,
-    ay: previousPoint.ay + (nextPoint.ay - previousPoint.ay) * segmentProgress,
-    az: previousPoint.az + (nextPoint.az - previousPoint.az) * segmentProgress,
-    magnitude: previousPoint.magnitude + (nextPoint.magnitude - previousPoint.magnitude) * segmentProgress,
+    ax: (previousPoint.ax ?? 0) + ((nextPoint.ax ?? 0) - (previousPoint.ax ?? 0)) * segmentProgress,
+    ay: (previousPoint.ay ?? 0) + ((nextPoint.ay ?? 0) - (previousPoint.ay ?? 0)) * segmentProgress,
+    az: (previousPoint.az ?? 0) + ((nextPoint.az ?? 0) - (previousPoint.az ?? 0)) * segmentProgress,
+    magnitude: (previousPoint.magnitude ?? 0) + ((nextPoint.magnitude ?? 0) - (previousPoint.magnitude ?? 0)) * segmentProgress,
   };
   const pointFromEvent = (event: PointerEvent<SVGSVGElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -246,12 +325,18 @@ function FlightPanel({
         <line x1={toX(launchTime)} x2={toX(launchTime)} y1={14} y2={chartHeight - pad} className="flight-marker" />
         {stats?.impactTime?.value !== null && stats?.impactTime && <line x1={toX(stats.impactTime.value)} x2={toX(stats.impactTime.value)} y1={14} y2={chartHeight - pad} className="impact-marker" />}
         {burnoutTime !== null && <line x1={toX(burnoutTime)} x2={toX(burnoutTime)} y1={14} y2={chartHeight - pad} className="flight-marker" />}
+        {(flight.restartTimes ?? []).filter((time) => time >= rangeStart && time <= rangeEnd).map((time) => (
+          <g key={`restart-${time}`}>
+            <line x1={toX(time)} x2={toX(time)} y1={14} y2={chartHeight - pad} className="flight-marker" />
+            <text x={toX(time) + 3} y={25}>ESP restart</text>
+          </g>
+        ))}
         <path d={pathFor("magnitude")} className="acceleration-line" />
         {visibleAxes.ax && <path d={pathFor("ax")} className="axis-line axis-x" />}
         {visibleAxes.ay && <path d={pathFor("ay")} className="axis-line axis-y" />}
         {visibleAxes.az && <path d={pathFor("az")} className="axis-line axis-z" />}
-        {renderedSamples.filter((item) => item.time >= rangeStart && item.time <= rangeEnd && item.magnitude >= limit * 0.98).map((item) => (
-          <circle key={item.time} cx={toX(item.time)} cy={toY(item.magnitude)} r="2.5" className="clipped-sample" />
+        {renderedSamples.filter((item) => item.time >= rangeStart && item.time <= rangeEnd && (item.magnitude ?? 0) >= limit).map((item) => (
+          <circle key={item.time} cx={toX(item.time)} cy={toY(item.magnitude ?? 0)} r="2.5" className="clipped-sample" />
         ))}
         <circle cx={toX(currentTime)} cy={toY(point.magnitude)} r="5" className="playback-marker" />
         <text x={pad} y={chartHeight - 7}>0 s</text>

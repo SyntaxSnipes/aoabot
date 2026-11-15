@@ -1,6 +1,7 @@
 import { rocketFacts } from "@/data/rocket-facts";
 
-export type FlightSample = [number, number, number, number];
+export type FlightSample = [number, number | null, number | null, number | null];
+export type MissingDataRange = { startTime: number; endTime: number };
 export type FlightProvenance = "real" | "demo" | "unverified";
 export type LaunchType = "launcher" | "hand_throw" | "drop_test" | "other";
 export type FlightData = {
@@ -10,6 +11,11 @@ export type FlightData = {
   units: "m/s^2";
   columns: ["t_us", "ax", "ay", "az"];
   samples: FlightSample[];
+  missingDataIndices?: number[];
+  missingDataRanges?: MissingDataRange[];
+  restartTimes?: number[];
+  duplicateRowsRemoved?: number;
+  totalRows?: number;
   date?: string;
   provenance: FlightProvenance;
   label?: string;
@@ -28,6 +34,10 @@ export type FlightStats = {
   flightId: number;
   provenance: FlightProvenance;
   launchType: LaunchType;
+  duplicateRowsRemoved: number;
+  restartCount: number;
+  missingDataCount: number;
+  missingDataRanges: MissingDataRange[];
   restingMagnitude: Value<number> | null;
   magnitude: Value<{ peak: number; clipped: boolean }> | null;
   freeFallStart: Value<number> | null;
@@ -90,6 +100,10 @@ export function get_flight_stats(flightId: number, flight?: FlightData, selectio
       flightId,
       provenance: flight?.provenance ?? "unverified",
       launchType: flight?.launchType ?? "other",
+      duplicateRowsRemoved: flight?.duplicateRowsRemoved ?? 0,
+      restartCount: flight?.restartTimes?.length ?? 0,
+      missingDataCount: flight?.missingDataIndices?.length ?? 0,
+      missingDataRanges: flight?.missingDataRanges ?? [],
       restingMagnitude: null,
       magnitude: null,
       freeFallStart: null,
@@ -112,25 +126,61 @@ export function get_flight_stats(flightId: number, flight?: FlightData, selectio
 
   const launchType = flight.launchType ?? "other";
   const config = flightConfig();
-  const selectedSamples = selection
-    ? flight.samples.filter((sample) => sample[0] / 1_000_000 >= selection.startTime && sample[0] / 1_000_000 <= selection.endTime)
-    : flight.samples;
-  const samples = selectedSamples.length > 0 ? selectedSamples : flight.samples;
-  const staticSamples = samples.filter((sample) => sample[0] <= 500000);
-  const baselineSamples = staticSamples.length > 0 ? staticSamples : flight.samples.slice(0, Math.min(3, flight.samples.length));
+  const selectedSamples = flight.samples
+    .map((sample, index) => ({ sample, index }))
+    .filter(({ sample }) => !selection
+      || (sample[0] / 1_000_000 >= selection.startTime && sample[0] / 1_000_000 <= selection.endTime));
+  const validSamples = selectedSamples.filter(({ sample, index }) => (
+    !flight.missingDataIndices?.includes(index)
+    && sample[1] !== null && sample[2] !== null && sample[3] !== null
+  ));
+  const samples = validSamples.length > 0 ? validSamples : [];
+  if (samples.length === 0) {
+    return {
+      flightId,
+      provenance: flight.provenance,
+      launchType: flight.launchType,
+      duplicateRowsRemoved: flight.duplicateRowsRemoved ?? 0,
+      restartCount: flight.restartTimes?.length ?? 0,
+      missingDataCount: flight.missingDataIndices?.length ?? 0,
+      missingDataRanges: flight.missingDataRanges ?? [],
+      restingMagnitude: null,
+      magnitude: null,
+      freeFallStart: null,
+      impactTime: null,
+      impactAcceleration: null,
+      roughApogee: null,
+      releaseAcceleration: null,
+      launchTime: null,
+      burnTime: null,
+      peakAcceleration: null,
+      flightTime: null,
+      launchSpeed: null,
+      peakThrust: null,
+      impulse: null,
+      estimatedRange: null,
+      clipped: false,
+      reason: "No valid samples are available for this flight.",
+    };
+  }
+  const staticSamples = samples.filter(({ sample }) => sample[0] <= 500000);
+  const baselineSamples = staticSamples.length > 0 ? staticSamples : samples.slice(0, Math.min(3, samples.length));
   const expected = [0, 0, 0];
   if (config.axisIndex) expected[config.axisIndex - 1] = g * config.sign;
   const bias = [0, 1, 2].map((index) => (
-    baselineSamples.reduce((sum, sample) => sum + sample[index + 1], 0) / baselineSamples.length - expected[index]
+    baselineSamples.reduce((sum, { sample }) => sum + (sample[index + 1] ?? 0), 0) / baselineSamples.length - expected[index]
   ));
-  const corrected = samples.map((sample) => {
-    const axes = [0, 1, 2].map((index) => sample[index + 1] - bias[index]);
+  const corrected = samples.map(({ sample, index: originalIndex }) => {
+    const axes = [0, 1, 2].map((index) => (sample[index + 1] ?? 0) - bias[index]);
+    const segment = (flight.restartTimes ?? []).filter((time) => sample[0] / 1_000_000 >= time).length
+      + (flight.missingDataIndices ?? []).filter((missingIndex) => missingIndex < originalIndex).length;
     return {
       time: sample[0] / 1_000_000,
       axes,
       magnitude: Math.hypot(...axes),
-      rawMagnitude: Math.hypot(sample[1], sample[2], sample[3]),
+      rawMagnitude: Math.hypot(sample[1] ?? 0, sample[2] ?? 0, sample[3] ?? 0),
       axis: config.axisIndex ? axes[config.axisIndex - 1] * config.sign : null,
+      segment,
     };
   });
   const baselineAxis = config.axisIndex
@@ -142,14 +192,14 @@ export function get_flight_stats(flightId: number, flight?: FlightData, selectio
   const baselineRawMagnitude = corrected.slice(0, baselineSamples.length)
     .reduce((sum, sample) => sum + sample.rawMagnitude, 0) / baselineSamples.length;
   const limit = flight.range_g * g;
-  const clipped = corrected.some((sample) => sample.rawMagnitude >= limit * 0.98);
+  const clipped = corrected.some((sample) => sample.rawMagnitude >= limit);
   const peak = Math.max(...corrected.map((sample) => sample.rawMagnitude));
   const freeFallWindows: Array<{ start: number; end: number }> = [];
   let freeFallStartIndex = -1;
   for (let index = 0; index < corrected.length; index += 1) {
     if (corrected[index].rawMagnitude >= 3) continue;
     const start = index;
-    while (index + 1 < corrected.length && corrected[index + 1].rawMagnitude < 3) index += 1;
+    while (index + 1 < corrected.length && corrected[index + 1].segment === corrected[start].segment && corrected[index + 1].rawMagnitude < 3) index += 1;
     if (corrected[index].time - corrected[start].time >= 0.3) {
       freeFallWindows.push({ start, end: index });
     }
@@ -160,7 +210,7 @@ export function get_flight_stats(flightId: number, flight?: FlightData, selectio
   if (freeFall) freeFallStartIndex = freeFall.start;
   const freeFallStart = freeFall ? corrected[freeFall.start] : null;
   const impactIndex = freeFall
-    ? corrected.findIndex((sample, index) => index > freeFall.end && sample.rawMagnitude > 8 * g)
+    ? corrected.findIndex((sample, index) => index > freeFall.end && sample.segment === corrected[freeFall.end].segment && sample.rawMagnitude > 8 * g)
     : -1;
   const impact = impactIndex >= 0 ? corrected[impactIndex] : null;
   const flightSeconds = freeFallStart && impact ? impact.time - freeFallStart.time : null;
@@ -174,9 +224,9 @@ export function get_flight_stats(flightId: number, flight?: FlightData, selectio
   const launch = freeFallStart;
   const burnoutIndex = freeFallStartIndex >= 0
     ? corrected.findIndex((sample, index) => index > freeFallStartIndex && (
-      config.axisIndex
+      sample.segment === corrected[freeFallStartIndex].segment && (config.axisIndex
         ? (sample.axis ?? 0) <= (baselineAxis ?? 0) + 1
-        : sample.magnitude <= baselineMagnitude + 1
+        : sample.magnitude <= baselineMagnitude + 1)
     ))
     : -1;
   const burnout = burnoutIndex >= 0 ? corrected[burnoutIndex] : null;
@@ -193,7 +243,8 @@ export function get_flight_stats(flightId: number, flight?: FlightData, selectio
       : massReason;
   if (launchType === "launcher" && launch && burnSeconds && burnSeconds > 0 && config.axisIndex
     && config.angle !== null && config.dryMass !== null && config.waterMass !== null) {
-    const burnSamples = corrected.slice(freeFallStartIndex, burnoutIndex >= 0 ? burnoutIndex + 1 : corrected.length);
+    const burnSamples = corrected.slice(freeFallStartIndex, burnoutIndex >= 0 ? burnoutIndex + 1 : corrected.length)
+      .filter((sample) => sample.segment === corrected[freeFallStartIndex].segment);
     let speed = 0;
     let thrustImpulse = 0;
     let thrustPeak = 0;
@@ -236,6 +287,10 @@ export function get_flight_stats(flightId: number, flight?: FlightData, selectio
     flightId,
     provenance: flight.provenance,
     launchType,
+    duplicateRowsRemoved: flight.duplicateRowsRemoved ?? 0,
+    restartCount: flight.restartTimes?.length ?? 0,
+    missingDataCount: flight.missingDataIndices?.length ?? 0,
+    missingDataRanges: flight.missingDataRanges ?? [],
     restingMagnitude: value(baselineRawMagnitude, "measured", "m/s^2", "Mean raw magnitude in the first 0.5 s; sanity check against 9.81 m/s^2."),
     magnitude: value({ peak, clipped }, "measured", "m/s^2", "Magnitude is sqrt(ax^2 + ay^2 + az^2) for every sample."),
     freeFallStart: freeFallStart ? value(freeFallStart.time, "measured", "s", "Start of the longest acceleration-magnitude window below 3 m/s^2 lasting at least 0.3 s.") : missing("No free-fall window of at least 0.3 s was detected."),
